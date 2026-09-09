@@ -5,23 +5,223 @@ import android.content.Context;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.StatFs;
-import android.os.SystemHealthManager;
+
 import java.io.BufferedReader;
 import java.io.FileReader;
-import java.util.ArrayList;
-import java.util.List;
+import java.io.IOException;
+import java.util.Locale;
 
-public final class Metrics {
-    public float cpu; public float ram; public float battery; public float power; public float cpuHeadroom=-1; public float gpuHeadroom=-1; public long storageFree; public long storageTotal; public List<Float> cores=new ArrayList<>();
-    private long prevTotal=-1, prevIdle=-1; private long[] prevCoreTotal; private long[] prevCoreIdle;
-    public static Metrics read(Context c, Metrics old){ Metrics m=old==null?new Metrics():old; m.readCpu(); m.readRam(c); m.readBattery(c); m.readStorage(); m.readHeadroom(c); return m; }
-    private void readCpu(){
-        try(BufferedReader br=new BufferedReader(new FileReader("/proc/stat"))){String line; long total=0,idle=0; List<Long> ct=new ArrayList<>(),ci=new ArrayList<>(); while((line=br.readLine())!=null){if(line.startsWith("cpu ")){String[] p=line.trim().split("\\s+");for(int i=1;i<p.length;i++)total+=Long.parseLong(p[i]); idle=Long.parseLong(p[4])+Long.parseLong(p[5]);}else if(line.matches("cpu[0-9]+\\s+.*")){String[] p=line.trim().split("\\s+");long t=0;for(int i=1;i<p.length;i++)t+=Long.parseLong(p[i]);ct.add(t);ci.add(Long.parseLong(p[4])+Long.parseLong(p[5]));}} if(prevTotal>0){long dt=total-prevTotal,di=idle-prevIdle;cpu=dt>0?100f*(dt-di)/dt:0;} prevTotal=total;prevIdle=idle; if(prevCoreTotal!=null){cores.clear();for(int i=0;i<ct.size();i++){long dt=ct.get(i)-prevCoreTotal[i],di=ci.get(i)-prevCoreIdle[i];cores.add(dt>0?100f*(dt-di)/dt:0);}} prevCoreTotal=new long[ct.size()];prevCoreIdle=new long[ci.size()];for(int i=0;i<ct.size();i++){prevCoreTotal[i]=ct.get(i);prevCoreIdle[i]=ci.get(i);}}
-        }catch(Exception ignored){}
+public class Metrics {
+
+    public int battery = 0;
+    public float power = 0f;
+
+    public long storageTotal = 0;
+    public long storageFree = 0;
+
+    public long ramTotal = 0;
+    public long ramAvailable = 0;
+
+    public float cpuUsage = 0f;
+    public int cpuCores = 0;
+
+    public float gpuHeadroom = -1f;
+    public float cpuHeadroom = -1f;
+
+    public String gpuRenderer = "Unknown";
+
+    private long lastIdle = 0;
+    private long lastTotal = 0;
+
+    public void update(Context context) {
+        readBattery(context);
+        readStorage();
+        readMemory(context);
+        readCpu();
+
+        if (Build.VERSION.SDK_INT >= 36) {
+            readHeadroom(context);
+        }
     }
-    private void readRam(Context c){ActivityManager am=(ActivityManager)c.getSystemService(Context.ACTIVITY_SERVICE);ActivityManager.MemoryInfo i=new ActivityManager.MemoryInfo();am.getMemoryInfo(i);ram=100f*(1f-(float)i.availMem/(float)i.totalMem);}
-    private void readBattery(Context c){BatteryManager b=(BatteryManager)c.getSystemService(Context.BATTERY_SERVICE);int cap=b.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);battery=cap;int cur=b.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW);int volt=b.getIntProperty(BatteryManager.BATTERY_PROPERTY_VOLTAGE_NOW);power=cur==Integer.MIN_VALUE||volt==Integer.MIN_VALUE?0f:Math.abs(cur)*Math.abs(volt)/1_000_000_000f;}
-    private void readStorage(){StatFs s=new StatFs(android.os.Environment.getDataDirectory().getPath());storageTotal=s.getTotalBytes();storageFree=s.getAvailableBytes();}
-    private void readHeadroom(Context c){if(Build.VERSION.SDK_INT>=36){try{SystemHealthManager h=(SystemHealthManager)c.getSystemService(SystemHealthManager.class);cpuHeadroom=h.getCpuHeadroom(new SystemHealthManager.CpuHeadroomParams.Builder().build());gpuHeadroom=h.getGpuHeadroom(new SystemHealthManager.GpuHeadroomParams.Builder().build());}catch(Throwable ignored){}}}
-    public String summary(){return String.format("CPU %.0f%%\nRAM %.0f%%\nBattery %.0f%%\nPower %.2f W",cpu,ram,battery,power);}
+
+    private void readBattery(Context context) {
+        BatteryManager batteryManager =
+                (BatteryManager) context.getSystemService(Context.BATTERY_SERVICE);
+
+        if (batteryManager == null) {
+            return;
+        }
+
+        int capacity = batteryManager.getIntProperty(
+                BatteryManager.BATTERY_PROPERTY_CAPACITY
+        );
+
+        if (capacity != Integer.MIN_VALUE) {
+            battery = capacity;
+        }
+
+        int current = batteryManager.getIntProperty(
+                BatteryManager.BATTERY_PROPERTY_CURRENT_NOW
+        );
+
+        int voltage = batteryManager.getIntProperty(
+                BatteryManager.BATTERY_PROPERTY_VOLTAGE_NOW
+        );
+
+        if (current != Integer.MIN_VALUE && voltage != Integer.MIN_VALUE) {
+            power = Math.abs(current) * Math.abs(voltage) / 1_000_000_000f;
+        } else {
+            power = 0f;
+        }
+    }
+
+    private void readStorage() {
+        StatFs statFs = new StatFs(
+                android.os.Environment.getDataDirectory().getPath()
+        );
+
+        storageTotal = statFs.getTotalBytes();
+        storageFree = statFs.getAvailableBytes();
+    }
+
+    private void readMemory(Context context) {
+        ActivityManager activityManager =
+                (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+
+        if (activityManager == null) {
+            return;
+        }
+
+        ActivityManager.MemoryInfo memoryInfo =
+                new ActivityManager.MemoryInfo();
+
+        activityManager.getMemoryInfo(memoryInfo);
+
+        ramTotal = memoryInfo.totalMem;
+        ramAvailable = memoryInfo.availMem;
+    }
+
+    private void readCpu() {
+        cpuCores = Runtime.getRuntime().availableProcessors();
+
+        long idle = 0;
+        long total = 0;
+
+        try {
+            BufferedReader reader =
+                    new BufferedReader(new FileReader("/proc/stat"));
+
+            String line = reader.readLine();
+            reader.close();
+
+            if (line != null && line.startsWith("cpu ")) {
+                String[] parts = line.trim().split("\\s+");
+
+                long user = Long.parseLong(parts[1]);
+                long nice = Long.parseLong(parts[2]);
+                long system = Long.parseLong(parts[3]);
+                long idleTime = Long.parseLong(parts[4]);
+                long iowait = Long.parseLong(parts[5]);
+                long irq = Long.parseLong(parts[6]);
+                long softirq = Long.parseLong(parts[7]);
+                long steal = Long.parseLong(parts[8]);
+
+                idle = idleTime + iowait;
+                total = user + nice + system + idleTime
+                        + iowait + irq + softirq + steal;
+            }
+
+        } catch (IOException | NumberFormatException ignored) {
+        }
+
+        if (lastTotal > 0 && total > lastTotal) {
+            long totalDelta = total - lastTotal;
+            long idleDelta = idle - lastIdle;
+
+            cpuUsage = 100f * (1f - ((float) idleDelta / totalDelta));
+
+            if (cpuUsage < 0f) {
+                cpuUsage = 0f;
+            }
+
+            if (cpuUsage > 100f) {
+                cpuUsage = 100f;
+            }
+        }
+
+        lastTotal = total;
+        lastIdle = idle;
+    }
+
+    private void readHeadroom(Context context) {
+        try {
+            if (Build.VERSION.SDK_INT >= 36) {
+
+                android.os.SystemHealthManager healthManager =
+                        (android.os.SystemHealthManager)
+                                context.getSystemService(
+                                        Context.SYSTEM_HEALTH_SERVICE
+                                );
+
+                if (healthManager != null) {
+                    cpuHeadroom = healthManager.getCpuHeadroom(
+                            android.os.SystemHealthManager.HEADROOM_FORECAST
+                    );
+
+                    gpuHeadroom = healthManager.getGpuHeadroom(
+                            android.os.SystemHealthManager.HEADROOM_FORECAST
+                    );
+                }
+            }
+        } catch (Exception ignored) {
+            cpuHeadroom = -1f;
+            gpuHeadroom = -1f;
+        }
+    }
+
+    public String getRamUsageText() {
+        if (ramTotal <= 0) {
+            return "Unknown";
+        }
+
+        long used = ramTotal - ramAvailable;
+
+        return String.format(
+                Locale.US,
+                "%.1f / %.1f GB",
+                used / 1024f / 1024f / 1024f,
+                ramTotal / 1024f / 1024f / 1024f
+        );
+    }
+
+    public float getRamUsagePercent() {
+        if (ramTotal <= 0) {
+            return 0f;
+        }
+
+        return ((float) (ramTotal - ramAvailable) / ramTotal) * 100f;
+    }
+
+    public String getStorageUsageText() {
+        if (storageTotal <= 0) {
+            return "Unknown";
+        }
+
+        long used = storageTotal - storageFree;
+
+        return String.format(
+                Locale.US,
+                "%.1f / %.1f GB",
+                used / 1024f / 1024f / 1024f,
+                storageTotal / 1024f / 1024f / 1024f
+        );
+    }
+
+    public float getStorageUsagePercent() {
+        if (storageTotal <= 0) {
+            return 0f;
+        }
+
+        return ((float) (storageTotal - storageFree) / storageTotal) * 100f;
+    }
 }
