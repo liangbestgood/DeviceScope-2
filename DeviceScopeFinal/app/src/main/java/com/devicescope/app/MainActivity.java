@@ -1,19 +1,290 @@
 package com.devicescope.app;
 
-import android.Manifest;import android.app.*;import android.content.*;import android.content.pm.PackageManager;import android.graphics.*;import android.net.Uri;import android.os.*;import android.provider.Settings;import android.view.*;import androidx.core.content.ContextCompat;import androidx.core.content.FileProvider;import java.io.*;import java.util.*;
+import android.app.Activity;
+import android.os.Bundle;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.view.View;
 
-public class MainActivity extends Activity{
-  Board board; Metrics metrics; final String[] tabs={"概览","性能","电池","游戏","设置"}; int page=0; Handler handler=new Handler(Looper.getMainLooper());
-  @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(Color.rgb(11,13,16));board=new Board(this);setContentView(board);if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},9);handler.post(refresh);}
-  final Runnable refresh=()->{metrics=Metrics.read(this,metrics);board.invalidate();handler.postDelayed(refresh,1000);};
-  void startMonitor(){if(!Settings.canDrawOverlays(this)){startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:"+getPackageName())));return;}Intent i=new Intent(this,MonitorService.class);if(Build.VERSION.SDK_INT>=26)startForegroundService(i);else startService(i);}
-  void exportReport(){try{File dir=new File(getExternalFilesDir(null),"reports");dir.mkdirs();File f=new File(dir,"DeviceScope-report.txt");try(FileWriter w=new FileWriter(f)){w.write(report());}Uri u=FileProvider.getUriForFile(this,getPackageName()+".fileprovider",f);Intent s=new Intent(Intent.ACTION_SEND);s.setType("text/plain");s.putExtra(Intent.EXTRA_STREAM,u);s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(Intent.createChooser(s,"导出设备报告"));}catch(Throwable e){new AlertDialog.Builder(this).setTitle("导出失败").setMessage(String.valueOf(e)).setPositiveButton("确定",null).show();}}
-  String report(){return "DeviceScope 1.0.0\n\n"+(metrics==null?"":metrics.summary())+"\nGPU: "+GpuInfo.renderer()+"\nStorage: "+(metrics.storageFree/1073741824)+" GB free / "+(metrics.storageTotal/1073741824)+" GB total\n";}
-  class Board extends View{Paint p=new Paint(1); public Board(Context c){super(c);p.setTypeface(Typeface.create("sans",0));setBackgroundColor(Color.rgb(11,13,16));}
-   void txt(Canvas c,String s,float x,float y,float size,int color){p.setTextSize(size);p.setColor(color);p.setTypeface(Typeface.create("sans",0));c.drawText(s,x,y,p);} void card(Canvas c,float l,float t,float r,float b){p.setColor(Color.rgb(21,25,32));c.drawRoundRect(l,t,r,b,22,22,p);}
-   @Override protected void onDraw(Canvas c){super.onDraw(c);float w=getWidth();int white=Color.rgb(244,247,250),muted=Color.rgb(143,154,166),accent=Color.rgb(92,225,230);txt(c,"DeviceScope",24,42,24,white);txt(c,"Android 16 Device Monitor",24,67,13,muted);float top=92;for(int i=0;i<tabs.length;i++){float l=12+i*(w-24)/5f;float r=12+(i+1)*(w-24)/5f;if(i==page){p.setColor(Color.rgb(21,25,32));c.drawRoundRect(l,top,r,top+42,16,16,p);}txt(c,tabs[i],l+18,top+27,13,i==page?accent:muted);}float y=155;if(metrics==null)return; if(page==0){metricCard(c,"CPU",String.format("%.0f%%",metrics.cpu),24,y, w/2-12,y+110,accent);metricCard(c,"RAM",String.format("%.0f%%",metrics.ram),w/2+12,y,w-24,y+110,accent);metricCard(c,"电池",String.format("%.0f%%",metrics.battery),24,y+126,w/2-12,y+236,accent);metricCard(c,"功耗",String.format("%.2f W",metrics.power),w/2+12,y+126,w-24,y+236,accent);card(c,24,y+252,w-24,y+390);txt(c,"GPU",42,y+285,14,muted);txt(c,GpuInfo.renderer(),42,y+316,15,white);txt(c,"CPU Headroom",42,y+355,13,muted);txt(c,metrics.cpuHeadroom<0?"不可用":String.format("%.0f%%",metrics.cpuHeadroom),170,y+355,13,accent);}else if(page==1){card(c,24,y,w-24,y+390);txt(c,"CPU / 核心负载",42,y+34,16,white);txt(c,String.format("总体 %.0f%%",metrics.cpu),42,y+67,28,accent);float yy=y+105;for(int i=0;i<metrics.cores.size()&&i<12;i++){float load=metrics.cores.get(i);txt(c,"Core "+i,42,yy,12,muted);p.setColor(Color.rgb(55,63,73));c.drawRoundRect(105,yy-12,w-48,yy,6,6,p);p.setColor(accent);c.drawRoundRect(105,yy-12,105+(w-153)*load/100f,yy,6,6,p);yy+=25;}}else if(page==2){card(c,24,y,w-24,y+280);txt(c,"电池状态",42,y+40,16,white);txt(c,String.format("%.0f%%",metrics.battery),42,y+95,44,accent);txt(c,String.format("当前功耗 %.2f W",metrics.power),42,y+132,15,muted);txt(c,"实时电量与系统功耗监测",42,y+180,14,muted);}else if(page==3){card(c,24,y,w-24,y+300);txt(c,"游戏监控",42,y+42,18,white);txt(c,"覆盖层可显示 CPU / RAM / GPU Headroom",42,y+82,14,muted);txt(c,"GPU Headroom",42,y+135,13,muted);txt(c,metrics.gpuHeadroom<0?"--":String.format("%.0f%%",metrics.gpuHeadroom),42,y+175,32,accent);txt(c,"建议在游戏中启动悬浮监控",42,y+225,13,muted);}else{card(c,24,y,w-24,y+300);txt(c,"设置",42,y+42,18,white);txt(c,"启动悬浮监控",42,y+90,15,white);txt(c,"导出设备报告",42,y+145,15,white);txt(c,"关于 DeviceScope 1.0.0",42,y+200,15,white);}
-   }
-   void metricCard(Canvas c,String a,String b,float l,float t,float r,float bot,int ac){card(c,l,t,r,bot);txt(c,a,l+18,t+30,13,Color.rgb(143,154,166));txt(c,b,l+18,t+76,30,ac);}
-   @Override public boolean onTouchEvent(android.view.MotionEvent e){if(e.getAction()!=MotionEvent.ACTION_UP)return true;float y=e.getY(),x=e.getX(),w=getWidth();if(y>=92&&y<=134){page=Math.max(0,Math.min(4,(int)((x-12)/((w-24)/5f))));invalidate();return true;}if(page==3&&y>300)startMonitor();if(page==4){if(y>210&&y<290)startMonitor();if(y>290&&y<360)exportReport();}return true;}
-  }
+import java.util.Locale;
+
+public class MainActivity extends Activity {
+
+    private Metrics metrics;
+    private DeviceScopeView deviceView;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        metrics = new Metrics();
+
+        deviceView = new DeviceScopeView();
+
+        setContentView(deviceView);
+
+        updateMetrics();
+    }
+
+    private void updateMetrics() {
+        metrics.update(getApplicationContext());
+
+        if (deviceView != null) {
+            deviceView.invalidate();
+        }
+
+        deviceView.postDelayed(
+                this::updateMetrics,
+                1000L
+        );
+    }
+
+    private class DeviceScopeView extends View {
+
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        DeviceScopeView() {
+            super(MainActivity.this);
+
+            paint.setTypeface(
+                    android.graphics.Typeface.create(
+                            "sans",
+                            android.graphics.Typeface.NORMAL
+                    )
+            );
+        }
+
+        private void text(
+                Canvas canvas,
+                String value,
+                float x,
+                float y,
+                float size,
+                int color
+        ) {
+            paint.setTextSize(size);
+            paint.setColor(color);
+            canvas.drawText(value, x, y, paint);
+        }
+
+        private void card(
+                Canvas canvas,
+                float left,
+                float top,
+                float right,
+                float bottom
+        ) {
+            paint.setColor(Color.rgb(25, 30, 38));
+
+            canvas.drawRoundRect(
+                    left,
+                    top,
+                    right,
+                    bottom,
+                    20f,
+                    20f,
+                    paint
+            );
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+
+            float width = getWidth();
+
+            int background = Color.rgb(10, 13, 18);
+            int white = Color.rgb(244, 247, 250);
+            int muted = Color.rgb(143, 154, 166);
+            int accent = Color.rgb(92, 225, 230);
+
+            canvas.drawColor(background);
+
+            text(
+                    canvas,
+                    "DeviceScope",
+                    24,
+                    50,
+                    28,
+                    white
+            );
+
+            text(
+                    canvas,
+                    "Android 16 Device Monitor",
+                    24,
+                    76,
+                    14,
+                    muted
+            );
+
+            float y = 110;
+
+            card(
+                    canvas,
+                    20,
+                    y,
+                    width - 20,
+                    y + 120
+            );
+
+            text(
+                    canvas,
+                    "CPU",
+                    40,
+                    y + 35,
+                    14,
+                    muted
+            );
+
+            text(
+                    canvas,
+                    String.format(
+                            Locale.US,
+                            "%.0f%%",
+                            metrics.cpu
+                    ),
+                    40,
+                    y + 82,
+                    38,
+                    accent
+            );
+
+            card(
+                    canvas,
+                    20,
+                    y + 135,
+                    width - 20,
+                    y + 255
+            );
+
+            text(
+                    canvas,
+                    "RAM",
+                    40,
+                    y + 170,
+                    14,
+                    muted
+            );
+
+            text(
+                    canvas,
+                    String.format(
+                            Locale.US,
+                            "%.0f%%",
+                            metrics.ram
+                    ),
+                    40,
+                    y + 217,
+                    38,
+                    accent
+            );
+
+            card(
+                    canvas,
+                    20,
+                    y + 270,
+                    width - 20,
+                    y + 390
+            );
+
+            text(
+                    canvas,
+                    "Battery",
+                    40,
+                    y + 305,
+                    14,
+                    muted
+            );
+
+            text(
+                    canvas,
+                    String.format(
+                            Locale.US,
+                            "%.0f%%",
+                            metrics.battery
+                    ),
+                    40,
+                    y + 352,
+                    38,
+                    accent
+            );
+
+            card(
+                    canvas,
+                    20,
+                    y + 405,
+                    width - 20,
+                    y + 525
+            );
+
+            text(
+                    canvas,
+                    "Power",
+                    40,
+                    y + 440,
+                    14,
+                    muted
+            );
+
+            text(
+                    canvas,
+                    String.format(
+                            Locale.US,
+                            "%.2f W",
+                            metrics.power
+                    ),
+                    40,
+                    y + 487,
+                    32,
+                    accent
+            );
+
+            text(
+                    canvas,
+                    "GPU",
+                    40,
+                    y + 565,
+                    14,
+                    muted
+            );
+
+            text(
+                    canvas,
+                    GpuInfo.renderer(),
+                    40,
+                    y + 595,
+                    14,
+                    white
+            );
+
+            text(
+                    canvas,
+                    "CPU Headroom",
+                    40,
+                    y + 640,
+                    14,
+                    muted
+            );
+
+            String headroom =
+                    metrics.cpuHeadroom < 0
+                            ? "Unavailable"
+                            : String.format(
+                                    Locale.US,
+                                    "%.0f%%",
+                                    metrics.cpuHeadroom
+                            );
+
+            text(
+                    canvas,
+                    headroom,
+                    40,
+                    y + 675,
+                    22,
+                    accent
+            );
+        }
+    }
 }
