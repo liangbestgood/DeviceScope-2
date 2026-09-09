@@ -1,11 +1,98 @@
 package com.devicescope.app;
 
-import android.app.*;import android.content.*;import android.graphics.Color;import android.graphics.PixelFormat;import android.os.*;import android.provider.Settings;import android.view.*;import android.widget.TextView;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.Service;
+import android.content.Intent;
+import android.os.Build;
+import android.os.IBinder;
 
-public class MonitorService extends Service{
- private final Handler h=new Handler(Looper.getMainLooper()); private TextView overlay; private Metrics m; private final Runnable tick=()->{if(overlay!=null){m=Metrics.read(this,m);String gpu=m.gpuHeadroom<0?"--":String.format("%.0f%%",m.gpuHeadroom);overlay.setText(String.format("DeviceScope\nCPU %.0f%%  RAM %.0f%%\nGPU Headroom %s  BAT %.0f%%",m.cpu,m.ram,gpu,m.battery));}h.postDelayed(tick,1000);};
- @Override public void onCreate(){super.onCreate();createChannel();Notification n=new Notification.Builder(this,"devicescope").setContentTitle("DeviceScope").setContentText("正在监控设备性能").setSmallIcon(android.R.drawable.ic_menu_info_details).setOngoing(true).build();if(Build.VERSION.SDK_INT>=34)startForeground(7,n,ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);else startForeground(7,n);if(Settings.canDrawOverlays(this))showOverlay();h.post(tick);}
- private void createChannel(){if(Build.VERSION.SDK_INT>=26)((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(new NotificationChannel("devicescope","DeviceScope",NotificationManager.IMPORTANCE_LOW));}
- private void showOverlay(){WindowManager wm=(WindowManager)getSystemService(WINDOW_SERVICE);overlay=new TextView(this);overlay.setTextColor(Color.WHITE);overlay.setTextSize(12);overlay.setPadding(18,12,18,12);overlay.setBackgroundColor(0xCC101419);WindowManager.LayoutParams p=new WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT,WindowManager.LayoutParams.WRAP_CONTENT,Build.VERSION.SDK_INT>=26?WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY:WindowManager.LayoutParams.TYPE_PHONE,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,PixelFormat.TRANSLUCENT);p.gravity=Gravity.TOP|Gravity.END;p.y=80;wm.addView(overlay,p);}
- @Override public int onStartCommand(Intent i,int f,int s){return START_STICKY;} @Override public void onDestroy(){h.removeCallbacks(tick);if(overlay!=null){((WindowManager)getSystemService(WINDOW_SERVICE)).removeView(overlay);overlay=null;}super.onDestroy();} @Override public android.os.IBinder onBind(Intent i){return null;}
+public class MonitorService extends Service {
+
+    private static final String CHANNEL_ID = "devicescope_monitor";
+
+    private Metrics metrics;
+    private Thread monitorThread;
+    private volatile boolean running = false;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+
+        metrics = new Metrics();
+
+        createNotificationChannel();
+
+        Notification notification =
+                new Notification.Builder(this, CHANNEL_ID)
+                        .setContentTitle("DeviceScope")
+                        .setContentText("Device monitoring is running")
+                        .setSmallIcon(android.R.drawable.ic_menu_info_details)
+                        .setOngoing(true)
+                        .build();
+
+        startForeground(1001, notification);
+
+        running = true;
+
+        monitorThread = new Thread(() -> {
+            while (running) {
+                try {
+                    metrics.update(getApplicationContext());
+                    Thread.sleep(1000L);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception ignored) {
+                }
+            }
+        });
+
+        monitorThread.start();
+    }
+
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+
+            NotificationChannel channel =
+                    new NotificationChannel(
+                            CHANNEL_ID,
+                            "DeviceScope Monitor",
+                            NotificationManager.IMPORTANCE_LOW
+                    );
+
+            NotificationManager manager =
+                    getSystemService(NotificationManager.class);
+
+            if (manager != null) {
+                manager.createNotificationChannel(channel);
+            }
+        }
+    }
+
+    @Override
+    public int onStartCommand(
+            Intent intent,
+            int flags,
+            int startId
+    ) {
+        return START_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+        running = false;
+
+        if (monitorThread != null) {
+            monitorThread.interrupt();
+        }
+
+        super.onDestroy();
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
 }
