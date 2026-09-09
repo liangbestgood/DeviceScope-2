@@ -9,34 +9,32 @@ import android.os.StatFs;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 public class Metrics {
 
-    public int battery = 0;
+    public float cpu = 0f;
+    public float ram = 0f;
+    public float battery = 0f;
     public float power = 0f;
 
-    public long storageTotal = 0;
-    public long storageFree = 0;
-
-    public long ramTotal = 0;
-    public long ramAvailable = 0;
-
-    public float cpuUsage = 0f;
-    public int cpuCores = 0;
-
-    public float gpuHeadroom = -1f;
     public float cpuHeadroom = -1f;
+    public float gpuHeadroom = -1f;
 
-    public String gpuRenderer = "Unknown";
+    public final List<Float> cores = new ArrayList<>();
 
-    private long lastIdle = 0;
-    private long lastTotal = 0;
+    public long storageTotal = 0L;
+    public long storageFree = 0L;
+
+    private long lastTotal = 0L;
+    private long lastIdle = 0L;
 
     public void update(Context context) {
         readBattery(context);
-        readStorage();
         readMemory(context);
+        readStorage();
         readCpu();
 
         if (Build.VERSION.SDK_INT >= 36) {
@@ -45,14 +43,14 @@ public class Metrics {
     }
 
     private void readBattery(Context context) {
-        BatteryManager batteryManager =
+        BatteryManager manager =
                 (BatteryManager) context.getSystemService(Context.BATTERY_SERVICE);
 
-        if (batteryManager == null) {
+        if (manager == null) {
             return;
         }
 
-        int capacity = batteryManager.getIntProperty(
+        int capacity = manager.getIntProperty(
                 BatteryManager.BATTERY_PROPERTY_CAPACITY
         );
 
@@ -60,18 +58,39 @@ public class Metrics {
             battery = capacity;
         }
 
-        int current = batteryManager.getIntProperty(
+        int current = manager.getIntProperty(
                 BatteryManager.BATTERY_PROPERTY_CURRENT_NOW
         );
 
-        int voltage = batteryManager.getIntProperty(
+        int voltage = manager.getIntProperty(
                 BatteryManager.BATTERY_PROPERTY_VOLTAGE_NOW
         );
 
         if (current != Integer.MIN_VALUE && voltage != Integer.MIN_VALUE) {
-            power = Math.abs(current) * Math.abs(voltage) / 1_000_000_000f;
+            power = Math.abs((long) current)
+                    * Math.abs((long) voltage)
+                    / 1_000_000_000f;
         } else {
             power = 0f;
+        }
+    }
+
+    private void readMemory(Context context) {
+        ActivityManager manager =
+                (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+
+        if (manager == null) {
+            return;
+        }
+
+        ActivityManager.MemoryInfo info =
+                new ActivityManager.MemoryInfo();
+
+        manager.getMemoryInfo(info);
+
+        if (info.totalMem > 0) {
+            ram = ((float) (info.totalMem - info.availMem)
+                    / (float) info.totalMem) * 100f;
         }
     }
 
@@ -84,144 +103,107 @@ public class Metrics {
         storageFree = statFs.getAvailableBytes();
     }
 
-    private void readMemory(Context context) {
-        ActivityManager activityManager =
-                (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+    private void readCpu() {
+        cpu = readCpuLoad("/proc/stat");
 
-        if (activityManager == null) {
-            return;
+        cores.clear();
+
+        int coreCount = Runtime.getRuntime().availableProcessors();
+
+        for (int i = 0; i < coreCount; i++) {
+            float load = readCpuLoad("/proc/stat");
+            cores.add(load);
         }
-
-        ActivityManager.MemoryInfo memoryInfo =
-                new ActivityManager.MemoryInfo();
-
-        activityManager.getMemoryInfo(memoryInfo);
-
-        ramTotal = memoryInfo.totalMem;
-        ramAvailable = memoryInfo.availMem;
     }
 
-    private void readCpu() {
-        cpuCores = Runtime.getRuntime().availableProcessors();
-
-        long idle = 0;
-        long total = 0;
+    private float readCpuLoad(String path) {
+        long idle = 0L;
+        long total = 0L;
 
         try {
             BufferedReader reader =
-                    new BufferedReader(new FileReader("/proc/stat"));
+                    new BufferedReader(new FileReader(path));
 
             String line = reader.readLine();
             reader.close();
 
             if (line != null && line.startsWith("cpu ")) {
-                String[] parts = line.trim().split("\\s+");
+                String[] values = line.trim().split("\\s+");
 
-                long user = Long.parseLong(parts[1]);
-                long nice = Long.parseLong(parts[2]);
-                long system = Long.parseLong(parts[3]);
-                long idleTime = Long.parseLong(parts[4]);
-                long iowait = Long.parseLong(parts[5]);
-                long irq = Long.parseLong(parts[6]);
-                long softirq = Long.parseLong(parts[7]);
-                long steal = Long.parseLong(parts[8]);
+                if (values.length >= 9) {
+                    long user = Long.parseLong(values[1]);
+                    long nice = Long.parseLong(values[2]);
+                    long system = Long.parseLong(values[3]);
+                    long idleTime = Long.parseLong(values[4]);
+                    long iowait = Long.parseLong(values[5]);
+                    long irq = Long.parseLong(values[6]);
+                    long softirq = Long.parseLong(values[7]);
+                    long steal = Long.parseLong(values[8]);
 
-                idle = idleTime + iowait;
-                total = user + nice + system + idleTime
-                        + iowait + irq + softirq + steal;
+                    idle = idleTime + iowait;
+
+                    total = user + nice + system + idleTime
+                            + iowait + irq + softirq + steal;
+                }
             }
 
         } catch (IOException | NumberFormatException ignored) {
+            return 0f;
         }
 
-        if (lastTotal > 0 && total > lastTotal) {
+        if (lastTotal > 0L && total > lastTotal) {
             long totalDelta = total - lastTotal;
             long idleDelta = idle - lastIdle;
 
-            cpuUsage = 100f * (1f - ((float) idleDelta / totalDelta));
+            float result =
+                    100f * (1f - ((float) idleDelta / totalDelta));
 
-            if (cpuUsage < 0f) {
-                cpuUsage = 0f;
-            }
+            lastTotal = total;
+            lastIdle = idle;
 
-            if (cpuUsage > 100f) {
-                cpuUsage = 100f;
-            }
+            return Math.max(0f, Math.min(100f, result));
         }
 
         lastTotal = total;
         lastIdle = idle;
+
+        return cpu;
     }
 
     private void readHeadroom(Context context) {
-        try {
-            if (Build.VERSION.SDK_INT >= 36) {
+        cpuHeadroom = -1f;
+        gpuHeadroom = -1f;
 
-                android.os.SystemHealthManager healthManager =
-                        (android.os.SystemHealthManager)
-                                context.getSystemService(
-                                        Context.SYSTEM_HEALTH_SERVICE
-                                );
-
-                if (healthManager != null) {
-                    cpuHeadroom = healthManager.getCpuHeadroom(
-                            android.os.SystemHealthManager.HEADROOM_FORECAST
-                    );
-
-                    gpuHeadroom = healthManager.getGpuHeadroom(
-                            android.os.SystemHealthManager.HEADROOM_FORECAST
-                    );
-                }
-            }
-        } catch (Exception ignored) {
-            cpuHeadroom = -1f;
-            gpuHeadroom = -1f;
-        }
+        /*
+         * Android 16 headroom APIs can vary between preview/API revisions.
+         * Keep the fields available while avoiding a hard compile dependency
+         * on a potentially unavailable SystemHealthManager API.
+         */
     }
 
-    public String getRamUsageText() {
-        if (ramTotal <= 0) {
-            return "Unknown";
-        }
+    public String summary() {
+        float usedStorage = 0f;
+        float totalStorage = 0f;
 
-        long used = ramTotal - ramAvailable;
+        if (storageTotal > 0L) {
+            usedStorage =
+                    (storageTotal - storageFree)
+                            / 1024f / 1024f / 1024f;
+
+            totalStorage =
+                    storageTotal
+                            / 1024f / 1024f / 1024f;
+        }
 
         return String.format(
                 Locale.US,
-                "%.1f / %.1f GB",
-                used / 1024f / 1024f / 1024f,
-                ramTotal / 1024f / 1024f / 1024f
+                "CPU: %.0f%%\nRAM: %.0f%%\nBattery: %.0f%%\nPower: %.2f W\nStorage: %.1f / %.1f GB",
+                cpu,
+                ram,
+                battery,
+                power,
+                usedStorage,
+                totalStorage
         );
-    }
-
-    public float getRamUsagePercent() {
-        if (ramTotal <= 0) {
-            return 0f;
-        }
-
-        return ((float) (ramTotal - ramAvailable) / ramTotal) * 100f;
-    }
-
-    public String getStorageUsageText() {
-        if (storageTotal <= 0) {
-            return "Unknown";
-        }
-
-        long used = storageTotal - storageFree;
-
-        return String.format(
-                Locale.US,
-                "%.1f / %.1f GB",
-                used / 1024f / 1024f / 1024f,
-                storageTotal / 1024f / 1024f / 1024f
-        );
-    }
-
-    public float getStorageUsagePercent() {
-        if (storageTotal <= 0) {
-            return 0f;
-        }
-
-        return ((float) (storageTotal - storageFree) / storageTotal) * 100f;
     }
 }
