@@ -42,19 +42,22 @@ jobs:
           echo "===== Project root ====="
           ls -la
 
+          echo "===== DeviceScopeFinal ====="
+          ls -la DeviceScopeFinal
+
           echo "===== App directory ====="
-          ls -la app
+          ls -la DeviceScopeFinal/app
 
           echo "===== Main directory ====="
-          ls -la app/src/main
+          ls -la DeviceScopeFinal/app/src/main
 
       - name: Build DeviceScope APK
         run: |
-          gradle assembleDebug --no-daemon --stacktrace
+          gradle -p DeviceScopeFinal assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: DeviceScope-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: DeviceScopeFinal/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
